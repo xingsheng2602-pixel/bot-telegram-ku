@@ -39,7 +39,7 @@ UCAPAN_NYANYI = [
     "🎼 Untuk @{}: 'Ibu kita Kartini...' 🎼",
 ]
 
-DEFAULT_DURASI_TOILET = 10
+DEFAULT_DURASI_WC = 10
 DEFAULT_DURASI_ROKOK = 5
 MAX_IZIN_PER_HARI = 6
 
@@ -276,8 +276,8 @@ async def cmd_izin(update: Update, context: ContextTypes.DEFAULT_TYPE, jenis: st
     await schedule_reminder(context.application, chat.id, user.id, user.username, nama_izin, durasi, izin_id, delay)
     increment_izin_count(user_id_db, tanggal, jenis)
 
-async def cmd_toilet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await cmd_izin(update, context, "toilet", DEFAULT_DURASI_TOILET, "toilet 🚽", "🚽")
+async def cmd_WC(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_izin(update, context, "WC", DEFAULT_DURASI_WC, "WC 🚽", "🚽")
 
 async def cmd_rokok(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_izin(update, context, "rokok", DEFAULT_DURASI_ROKOK, "rokok 🚬", "🚬")
@@ -306,8 +306,8 @@ async def cmd_selesai(update: Update, context: ContextTypes.DEFAULT_TYPE, jenis:
             active_timers[user.id].cancel()
         del active_timers[user.id]
 
-async def cmd_selesai_toilet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await cmd_selesai(update, context, "toilet", "toilet")
+async def cmd_selesai_WC(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_selesai(update, context, "WC", "WC")
 
 async def cmd_selesai_rokok(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_selesai(update, context, "rokok", "rokok")
@@ -344,14 +344,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🌟 *Bot Absen & Denda* 🌟\n\n"
         "📋 *Daftar Perintah:*\n"
-        "/absen_masuk – Absen pagi (jam 10:00)\n"
+        "/Absen_Pagi – Absen pagi (jam 10:00)\n"
         "/istirahat_siang_mulai – Mulai istirahat siang (11:00-11:59)\n"
         "/absen_istirahat_siang – Kembali dari istirahat siang (max 12:00)\n"
         "/istirahat_sore_mulai – Mulai istirahat sore (17:00-17:59)\n"
         "/absen_istirahat_sore – Kembali dari istirahat sore (max 18:00)\n"
-        "/toilet 🚽 – Izin toilet (10 menit, max 6x/hari)\n"
+        "/WC 🚽 – Izin WC (10 menit, max 6x/hari)\n"
         "/rokok 🚬 – Izin rokok (5 menit, max 6x/hari)\n"
-        "/selesai_toilet – Selesai izin toilet\n"
+        "/selesai_WC – Selesai izin WC\n"
         "/selesai_rokok – Selesai izin rokok\n"
         "/pulang – Pulang kerja (wajib ≥22:00)\n"
         "/laporan_bulanan – Laporan bulanan (admin)\n"
@@ -360,7 +360,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-async def cmd_absen_masuk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_Absen_Pagi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user: return
     user_id_db = get_or_create_user(user)
@@ -460,11 +460,11 @@ async def cmd_laporan_bulanan(update: Update, context: ContextTypes.DEFAULT_TYPE
         nama = username or nama_depan
         c.execute("SELECT COUNT(*) FROM absensi WHERE user_id=? AND tanggal>=? AND tanggal<? AND shift='pagi' AND status='telat'", (uid, start, end))
         telat = c.fetchone()[0]
-        c.execute("SELECT SUM(jumlah) FROM counter_harian WHERE user_id=? AND tanggal>=? AND tanggal<? AND jenis='toilet'", (uid, start, end))
-        toilet = c.fetchone()[0] or 0
+        c.execute("SELECT SUM(jumlah) FROM counter_harian WHERE user_id=? AND tanggal>=? AND tanggal<? AND jenis='WC'", (uid, start, end))
+        wc = c.fetchone()[0] or 0
         c.execute("SELECT SUM(jumlah) FROM counter_harian WHERE user_id=? AND tanggal>=? AND tanggal<? AND jenis='rokok'", (uid, start, end))
         rokok = c.fetchone()[0] or 0
-        laporan += f"👤 *{nama}*\n   Telat pagi: {telat}\n   🚽 Toilet: {toilet} kali\n   🚬 Rokok: {rokok} kali\n\n"
+        laporan += f"👤 *{nama}*\n   Telat pagi: {telat}\n   🚽 WC: {wc} kali\n   🚬 Rokok: {rokok} kali\n\n"
     conn.close()
     await update.message.reply_text(laporan, parse_mode="Markdown")
 
@@ -484,14 +484,14 @@ async def daily_pulang_checker(app: Application):
 async def set_commands(app):
     await app.bot.set_my_commands([
         BotCommand("start", "🌟 Mulai bot"),
-        BotCommand("absen_masuk", "✅ Absen pagi jam 10:00"),
+        BotCommand("Absen_Pagi", "✅ Absen pagi jam 10:00"),
         BotCommand("istirahat_siang_mulai", "🍽️ Mulai istirahat siang (11:00-11:59)"),
         BotCommand("absen_istirahat_siang", "🍽️ Kembali dari istirahat siang (max 12:00)"),
         BotCommand("istirahat_sore_mulai", "🍽️ Mulai istirahat sore (17:00-17:59)"),
         BotCommand("absen_istirahat_sore", "🍽️ Kembali dari istirahat sore (max 18:00)"),
-        BotCommand("toilet", "🚽 Izin toilet (10 menit, max 6x/hari)"),
+        BotCommand("WC", "🚽 Izin WC (10 menit, max 6x/hari)"),
         BotCommand("rokok", "🚬 Izin rokok (5 menit, max 6x/hari)"),
-        BotCommand("selesai_toilet", "✅ Selesai izin toilet"),
+        BotCommand("selesai_WC", "✅ Selesai izin WC"),
         BotCommand("selesai_rokok", "✅ Selesai izin rokok"),
         BotCommand("pulang", "🏠 Pulang kerja (minimal 22:00)"),
         BotCommand("laporan_bulanan", "📊 Laporan bulanan (admin)"),
@@ -503,14 +503,14 @@ def main():
     init_db()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("absen_masuk", cmd_absen_masuk))
+    app.add_handler(CommandHandler("Absen_Pagi", cmd_Absen_Pagi))
     app.add_handler(CommandHandler("istirahat_siang_mulai", cmd_istirahat_siang_mulai))
     app.add_handler(CommandHandler("absen_istirahat_siang", cmd_absen_siang))
     app.add_handler(CommandHandler("istirahat_sore_mulai", cmd_istirahat_sore_mulai))
     app.add_handler(CommandHandler("absen_istirahat_sore", cmd_absen_sore))
-    app.add_handler(CommandHandler("toilet", cmd_toilet))
+    app.add_handler(CommandHandler("WC", cmd_WC))
     app.add_handler(CommandHandler("rokok", cmd_rokok))
-    app.add_handler(CommandHandler("selesai_toilet", cmd_selesai_toilet))
+    app.add_handler(CommandHandler("selesai_WC", cmd_selesai_WC))
     app.add_handler(CommandHandler("selesai_rokok", cmd_selesai_rokok))
     app.add_handler(CommandHandler("pulang", cmd_pulang))
     app.add_handler(CommandHandler("laporan_bulanan", cmd_laporan_bulanan))
