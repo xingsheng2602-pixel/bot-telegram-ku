@@ -91,12 +91,6 @@ def init_db():
                     chat_id INTEGER UNIQUE,
                     chat_type TEXT
                 )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS pulang_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    chat_id INTEGER,
-                    tanggal TEXT,
-                    UNIQUE(chat_id, tanggal)
-                )''')
     conn.commit()
     conn.close()
 
@@ -145,21 +139,6 @@ def get_all_chats() -> List[int]:
     rows = c.fetchall()
     conn.close()
     return [row[0] for row in rows]
-
-def sudah_kirim_pulang_today(chat_id: int, tanggal: str) -> bool:
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id FROM pulang_log WHERE chat_id = ? AND tanggal = ?", (chat_id, tanggal))
-    ok = c.fetchone() is not None
-    conn.close()
-    return ok
-
-def catat_kirim_pulang(chat_id: int, tanggal: str):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT INTO pulang_log (chat_id, tanggal) VALUES (?, ?)", (chat_id, tanggal))
-    conn.commit()
-    conn.close()
 
 def get_izin_count(user_id_db: int, tanggal: str, jenis: str) -> int:
     conn = sqlite3.connect(DB_PATH)
@@ -222,7 +201,10 @@ async def schedule_reminder(app, chat_id, user_id, username, jenis, durasi, izin
         conn.close()
         if row:
             mention = f"@{username}" if username else f"User {user_id}"
-            await app.bot.send_message(chat_id=chat_id, text=f"{mention}, waktu {jenis} {durasi} menit habis! Segera selesai.")
+            try:
+                await app.bot.send_message(chat_id=chat_id, text=f"{mention}, waktu {jenis} {durasi} menit habis! Segera /selesai_{jenis}.")
+            except:
+                pass
     task = asyncio.create_task(reminder())
     active_timers[user_id] = task
 
@@ -244,7 +226,8 @@ async def restore_timers(app):
 async def cmd_izin(update: Update, context: ContextTypes.DEFAULT_TYPE, jenis: str, default_durasi: int, nama_izin: str):
     user = update.effective_user
     chat = update.effective_chat
-    if not user or not chat: return
+    if not user or not chat:
+        return
     user_id_db = get_or_create_user(user)
     tanggal = datetime.now().strftime("%Y-%m-%d")
     used = get_izin_count(user_id_db, tanggal, jenis)
@@ -255,7 +238,7 @@ async def cmd_izin(update: Update, context: ContextTypes.DEFAULT_TYPE, jenis: st
 
     aktif = get_active_izin(user_id_db)
     if aktif:
-        await update.message.reply_text(f"⚠️ Masih ada izin {aktif[1]} aktif. Selesaikan dulu.")
+        await update.message.reply_text(f"⚠️ Masih ada izin {aktif[1]} aktif. Selesaikan dulu dengan /selesai_{aktif[1]}.")
         return
 
     args = context.args
@@ -285,10 +268,10 @@ async def cmd_izin(update: Update, context: ContextTypes.DEFAULT_TYPE, jenis: st
     increment_izin_count(user_id_db, tanggal, jenis)
 
 async def cmd_toilet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await cmd_izin(update, context, "toilet", DEFAULT_DURASI_TOILET, "toilet 🚽")
+    await cmd_izin(update, context, "toilet", DEFAULT_DURASI_TOILET, "toilet")
 
 async def cmd_rokok(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await cmd_izin(update, context, "rokok", DEFAULT_DURASI_ROKOK, "rokok 🚬")
+    await cmd_izin(update, context, "rokok", DEFAULT_DURASI_ROKOK, "rokok")
 
 async def cmd_selesai_izin(update: Update, context: ContextTypes.DEFAULT_TYPE, jenis: str, nama_izin: str):
     user = update.effective_user
@@ -482,10 +465,13 @@ async def daily_pulang_checker(app: Application):
         if now.hour == jam_pulang.hour and now.minute == jam_pulang.minute:
             tanggal = now.strftime("%Y-%m-%d")
             for chat_id in get_all_chats():
-                if not sudah_kirim_pulang_today(chat_id, tanggal):
+                if chat_id:
                     pesan = random.choice(UCAPAN_PULANG_LIST)
-                    await app.bot.send_message(chat_id=chat_id, text=f"🎉 Pulang Kerja! 🎉\n\n{pesan}")
-                    catat_kirim_pulang(chat_id, tanggal)
+                    try:
+                        await app.bot.send_message(chat_id=chat_id, text=f"🎉 Pulang Kerja! 🎉\n\n{pesan}")
+                    except:
+                        pass
+            # Tandai sudah dikirim untuk chat yang terdaftar, tanpa menyimpan log untuk sementara
         await asyncio.sleep(60)
 
 async def set_commands(app: Application):
