@@ -3,7 +3,7 @@ import sqlite3
 import logging
 import random
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -18,7 +18,6 @@ ISTIRAHAT_1_SELESAI = "12:00"
 ISTIRAHAT_2_MULAI = "17:00"
 ISTIRAHAT_2_SELESAI = "18:00"
 JAM_PULANG = "22:00"
-UCAPAN_PULANG_DEFAULT = "Lelah hari ini, bayaran masa depan. Time to go home!"
 
 UCAPAN_PULANG_LIST = [
     "Kerja keras hari ini cukup, besok kita kerja keras lagi (kalau ingat).",
@@ -26,31 +25,27 @@ UCAPAN_PULANG_LIST = [
     "Hati lega, kerjaan beres, waktunya menghilang dari peradaban kantor.",
     "Jalan-jalan ke Semanggi, mampir warung beli mentega.",
     "Saat melihat jam pulang, hatiku langsung lega.",
-    "Naik delman pulang dari desa, pulang-pulang mampir beli rotan.",
-    "Terima kasih atas semua jasa, sampai bertemu lagi di lain kesempatan.",
-    "Buah nangka buah manggis, niat kerja malah pengen nangis. Untung sekarang sudah boleh pulang.",
-    "Capek boleh, nyerah jangan. Tapi kalau disuruh lembur tanpa uang makan, kabur duluan.",
-    "Kerja keraslah sampai tetanggamu mengira kamu pelihara tuyul, padahal cuma pelihara kantung mata.",
-    "Pulang kerja bukan mau istirahat, tapi mau simulasi jadi orang kaya yang nggak usah kerja.",
-    "Mata sudah sayup, gaji belum naik. Yuk pulang!",
-    "Boss bilang produktif, hatiku bilang pulang.",
-    "Ketika jam pulang tiba, semua masalah terasa lebih ringan.",
-    "Pulang adalah waktu terbaik untuk memikirkan alasan izin besok.",
 ]
 
 UCAPAN_TELAT_PAGI = [
-    "🌅 Matahari sudah tinggi, tapi semangatmu masih di kasur? Besok lebih pagi ya!",
-    "⏰ Telat lagi? Jam dinding di kantor ini nggak pernah bohong lho.",
-    "🚦 Macet? Atau alarmnya yang macet? Coba alarm disetel lebih keras!",
-    "🍳 Sarapan dulu ya? Lain kali sarapan sambil jalan aja, biar nggak telat.",
-    "📉 Produktivitas menurun saat kamu telat. Besok semangat lagi!",
-    "🐢 Katakan tidak pada telat! Kamu lebih keren dari ini.",
-    "🎯 Target jam 10:00, tapi kamu datang jam {jam}. Masih bisa diperbaiki kok.",
-    "💪 Besok coba bangun 30 menit lebih awal. Badan sehat, absen tepat!",
-    "🕙 Waktu adalah uang. Sayang banget kalau terbuang cuma karena kesiangan.",
+    "🌅 Matahari sudah tinggi, tapi semangatmu masih di kasur?",
+    "⏰ Telat lagi? Jam dinding di kantor ini nggak pernah bohong.",
+    "🚦 Macet? Atau alarmnya yang macet?",
+    "🍳 Sarapan dulu ya? Lain kali sambil jalan.",
 ]
 
-DEFAULT_DURASI_IZIN_MENIT = 10
+UCAPAN_NYANYI = [
+    "Nyiurin @{} 🎤: 'Balonku ada lima...'",
+    "@{} dinyanyiin sama admin: 'Halo-halo Bandung...'",
+    "Untuk @{}: 'Ibu kita Kartini...' (suara fals)",
+    "@{}, admin suruh nyanyi: 'Bangun tidur ku terus mandi...'",
+    "Nyanyiin @{}: 'Kasih ibu...' (sambil nangis)",
+]
+
+DEFAULT_DURASI_TOILET = 10   # menit
+DEFAULT_DURASI_ROKOK = 5     # menit
+MAX_IZIN_PER_HARI = 6
+
 DB_PATH = "absen_bot.db"
 logging.basicConfig(level=logging.INFO)
 
@@ -77,15 +72,21 @@ def init_db():
                     waktu_masuk TEXT,
                     status TEXT
                 )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS izin_toilet (
+    c.execute('''CREATE TABLE IF NOT EXISTS izin_aktif (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
+                    jenis TEXT,
                     start_time TEXT,
-                    durasi_menit INTEGER,
                     expected_end_time TEXT,
-                    actual_end_time TEXT,
-                    status TEXT,
                     chat_id INTEGER
+                )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS counter_harian (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    tanggal TEXT,
+                    jenis TEXT,
+                    jumlah INTEGER,
+                    UNIQUE(user_id, tanggal, jenis)
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS chats (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,174 +163,221 @@ def catat_kirim_pulang(chat_id: int, tanggal: str):
     conn.commit()
     conn.close()
 
-def get_active_izin(user_telegram_id: int):
+def get_izin_count(user_id_db: int, tanggal: str, jenis: str) -> int:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''SELECT izin.id, izin.user_id, izin.expected_end_time, izin.durasi_menit, izin.chat_id
-                 FROM izin_toilet izin
-                 JOIN users ON izin.user_id = users.id
-                 WHERE users.telegram_id = ? AND izin.actual_end_time IS NULL
-                 ORDER BY izin.start_time DESC LIMIT 1''', (user_telegram_id,))
+    c.execute("SELECT jumlah FROM counter_harian WHERE user_id = ? AND tanggal = ? AND jenis = ?", (user_id_db, tanggal, jenis))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def increment_izin_count(user_id_db: int, tanggal: str, jenis: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO counter_harian (user_id, tanggal, jenis, jumlah) VALUES (?, ?, ?, 1) ON CONFLICT(user_id, tanggal, jenis) DO UPDATE SET jumlah = jumlah + 1",
+              (user_id_db, tanggal, jenis))
+    conn.commit()
+    conn.close()
+
+def reset_counter_hari_ini_admin(tanggal: str):
+    """Menghapus semua counter harian untuk tanggal tertentu, dan menghapus semua izin aktif."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    # Hapus counter harian
+    c.execute("DELETE FROM counter_harian WHERE tanggal = ?", (tanggal,))
+    # Hapus semua izin aktif
+    c.execute("DELETE FROM izin_aktif")
+    conn.commit()
+    conn.close()
+
+def get_active_izin(user_id_db: int) -> tuple:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, jenis, expected_end_time, chat_id FROM izin_aktif WHERE user_id = ? ORDER BY start_time DESC LIMIT 1", (user_id_db,))
     row = c.fetchone()
     conn.close()
     return row
 
-def cancel_izin_by_id(izin_id: int):
+def add_active_izin(user_id_db: int, jenis: str, start_time, expected_end, chat_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("UPDATE izin_toilet SET actual_end_time = ?, status = ? WHERE id = ?",
-              (datetime.now().isoformat(), "dibatalkan", izin_id))
+    c.execute("INSERT INTO izin_aktif (user_id, jenis, start_time, expected_end_time, chat_id) VALUES (?, ?, ?, ?, ?)",
+              (user_id_db, jenis, start_time.isoformat(), expected_end.isoformat(), chat_id))
+    izin_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return izin_id
+
+def remove_active_izin(izin_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM izin_aktif WHERE id = ?", (izin_id,))
     conn.commit()
     conn.close()
 
-# ========== PEMBATALAN IZIN OLEH ADMIN ==========
-async def cmd_cancel_izin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not user or user.id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ Hanya admin.")
-        return
-    if not context.args:
-        await update.message.reply_text("Format: /cancel_izin @username")
-        return
-    target_username = context.args[0].lstrip('@')
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT telegram_id, id FROM users WHERE username = ?", (target_username,))
-    row = c.fetchone()
-    conn.close()
-    if not row:
-        await update.message.reply_text(f"User @{target_username} tidak ditemukan.")
-        return
-    target_telegram_id, _ = row
-    izin_data = get_active_izin(target_telegram_id)
-    if not izin_data:
-        await update.message.reply_text(f"User @{target_username} tidak punya izin aktif.")
-        return
-    izin_id, _, _, durasi, chat_id = izin_data
-    cancel_izin_by_id(izin_id)
-    # Hapus timer jika ada
-    if target_telegram_id in active_timers:
-        if not active_timers[target_telegram_id].done():
-            active_timers[target_telegram_id].cancel()
-        del active_timers[target_telegram_id]
-    await update.message.reply_text(f"✅ Izin @{target_username} (durasi {durasi} menit) dibatalkan admin.")
-    try:
-        await context.bot.send_message(target_telegram_id, "Admin membatalkan izin toilet Anda karena kondisi darurat.")
-    except:
-        pass
+# ========== TIMER ==========
+active_timers: Dict[int, asyncio.Task] = {}
 
-# ========== FITUR IZIN TOILET ==========
-active_timers = {}
-
-async def schedule_reminder(app, chat_id, user_id, username, durasi, izin_id, delay_seconds):
+async def schedule_reminder(app, chat_id, user_id, username, jenis, durasi, izin_id, delay_seconds):
     async def reminder():
         await asyncio.sleep(delay_seconds)
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT actual_end_time FROM izin_toilet WHERE id = ?", (izin_id,))
+        c.execute("SELECT id FROM izin_aktif WHERE id = ?", (izin_id,))
         row = c.fetchone()
         conn.close()
-        if row and row[0] is None:
+        if row:
             mention = f"@{username}" if username else f"User {user_id}"
-            await app.bot.send_message(chat_id=chat_id, text=f"{mention}, waktu izin toilet {durasi} menit telah berakhir. Segera /selesai_toilet.")
+            await app.bot.send_message(chat_id=chat_id, text=f"{mention}, waktu {jenis} {durasi} menit habis! Segera selesai.")
     task = asyncio.create_task(reminder())
     active_timers[user_id] = task
 
 async def restore_timers(app):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''SELECT izin.id, izin.user_id, izin.expected_end_time, izin.durasi_menit, izin.chat_id, users.telegram_id, users.username
-                 FROM izin_toilet izin
-                 JOIN users ON izin.user_id = users.id
-                 WHERE izin.actual_end_time IS NULL''')
+    c.execute('''SELECT izin.id, izin.jenis, izin.expected_end_time, izin.durasi_menit, izin.chat_id, users.telegram_id, users.username
+                 FROM izin_aktif izin
+                 JOIN users ON izin.user_id = users.id''')
     rows = c.fetchall()
-    for izin_id, user_id, expected_end_str, durasi, chat_id, telegram_id, username in rows:
+    for izin_id, jenis, expected_end_str, durasi, chat_id, telegram_id, username in rows:
         expected_end = datetime.fromisoformat(expected_end_str)
         now = datetime.now()
         if expected_end > now:
             sisa = (expected_end - now).total_seconds()
-            await schedule_reminder(app, chat_id, telegram_id, username, durasi, izin_id, sisa)
+            await schedule_reminder(app, chat_id, telegram_id, username, jenis, durasi, izin_id, sisa)
     conn.close()
 
-async def cmd_izin_toilet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ========== IZIN ==========
+async def cmd_izin(update: Update, context: ContextTypes.DEFAULT_TYPE, jenis: str, default_durasi: int, nama_izin: str, command_text: str):
     user = update.effective_user
     chat = update.effective_chat
     if not user or not chat: return
     user_id_db = get_or_create_user(user)
+    tanggal = datetime.now().strftime("%Y-%m-%d")
+    used = get_izin_count(user_id_db, tanggal, jenis)
+    remaining = MAX_IZIN_PER_HARI - used
+    if used >= MAX_IZIN_PER_HARI:
+        await update.message.reply_text(f"⚠️ Anda sudah mencapai batas maksimal {MAX_IZIN_PER_HARI} kali {nama_izin} hari ini.")
+        return
+
+    aktif = get_active_izin(user_id_db)
+    if aktif:
+        await update.message.reply_text(f"⚠️ Anda masih memiliki izin {aktif[1]} aktif. Selesaikan dulu.")
+        return
+
     args = context.args
-    durasi = DEFAULT_DURASI_IZIN_MENIT
+    durasi = default_durasi
     if args and args[0].isdigit():
         durasi = int(args[0])
         if durasi <= 0:
             await update.message.reply_text("Durasi harus positif.")
             return
+
     start_time = datetime.now()
-    expected_end = start_time + timedelta(minutes=durasi)  # Sederhana, tanpa break
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT INTO izin_toilet (user_id, start_time, durasi_menit, expected_end_time, chat_id) VALUES (?, ?, ?, ?, ?)",
-              (user_id_db, start_time.isoformat(), durasi, expected_end.isoformat(), chat.id))
-    izin_id = c.lastrowid
-    conn.commit()
-    conn.close()
+    expected_end = start_time + timedelta(minutes=durasi)
+    izin_id = add_active_izin(user_id_db, jenis, start_time, expected_end, chat.id)
+
     mention = f"@{user.username}" if user.username else user.first_name
-    await update.message.reply_text(f"{mention}, izin {durasi} menit mulai {start_time.strftime('%H:%M')}. Selesai maksimal {expected_end.strftime('%H:%M')}. Selesai? /selesai_toilet")
+    await update.message.reply_text(
+        f"{mention}, {nama_izin} {durasi} menit mulai {start_time.strftime('%H:%M')}. Selesai maksimal {expected_end.strftime('%H:%M')}.\n"
+        f"Sisa kuota hari ini: {remaining-1}/{MAX_IZIN_PER_HARI}\n"
+        f"Selesai? ketik /selesai_{command_text}"
+    )
     if user.id in active_timers:
         if not active_timers[user.id].done():
             active_timers[user.id].cancel()
         del active_timers[user.id]
     delay = durasi * 60
-    await schedule_reminder(context.application, chat.id, user.id, user.username, durasi, izin_id, delay)
+    await schedule_reminder(context.application, chat.id, user.id, user.username, nama_izin, durasi, izin_id, delay)
+    increment_izin_count(user_id_db, tanggal, jenis)
 
-async def cmd_selesai_toilet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_toilet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_izin(update, context, "toilet", DEFAULT_DURASI_TOILET, "toilet", "toilet")
+
+async def cmd_rokok(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_izin(update, context, "rokok", DEFAULT_DURASI_ROKOK, "rokok", "rokok")
+
+async def cmd_selesai_izin(update: Update, context: ContextTypes.DEFAULT_TYPE, jenis: str, nama_izin: str, command_text: str):
     user = update.effective_user
     user_id_db = get_or_create_user(user)
-    now = datetime.now()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, expected_end_time FROM izin_toilet WHERE user_id = ? AND actual_end_time IS NULL ORDER BY start_time DESC LIMIT 1", (user_id_db,))
-    row = c.fetchone()
-    if not row:
-        await update.message.reply_text("Tidak ada izin aktif.")
-        conn.close()
+    aktif = get_active_izin(user_id_db)
+    if not aktif:
+        await update.message.reply_text(f"Tidak ada izin aktif.")
         return
-    izin_id, expected_end_str = row
+    izin_id, aktif_jenis, expected_end_str, chat_id = aktif
+    if aktif_jenis != jenis:
+        await update.message.reply_text(f"⚠️ Anda sedang dalam izin {aktif_jenis}, bukan {nama_izin}. Gunakan /selesai_{aktif_jenis}.")
+        return
     expected_end = datetime.fromisoformat(expected_end_str)
+    now = datetime.now()
     if now > expected_end:
-        status = "melebihi"
         selisih = int((now - expected_end).total_seconds() // 60)
-        await update.message.reply_text(f"⚠️ Melebihi batas {selisih} menit. Pelanggaran tercatat.")
+        await update.message.reply_text(f"⚠️ Anda melebihi batas waktu {selisih} menit. Pelanggaran tercatat.")
     else:
-        status = "tepat"
-        await update.message.reply_text("✅ Izin selesai tepat waktu.")
-    c.execute("UPDATE izin_toilet SET actual_end_time = ?, status = ? WHERE id = ?", (now.isoformat(), status, izin_id))
-    conn.commit()
-    conn.close()
+        await update.message.reply_text(f"✅ {nama_izin.capitalize()} selesai tepat waktu.")
+    remove_active_izin(izin_id)
     if user.id in active_timers:
         if not active_timers[user.id].done():
             active_timers[user.id].cancel()
         del active_timers[user.id]
 
-# ========== HANDLER UTAMA ==========
+async def cmd_selesai_toilet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_selesai_izin(update, context, "toilet", "toilet", "toilet")
+
+async def cmd_selesai_rokok(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_selesai_izin(update, context, "rokok", "rokok", "rokok")
+
+# ========== ADMIN RESET HARIAN ==========
+async def cmd_reset_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Hanya admin yang bisa mereset data hari ini.")
+        return
+    tanggal = datetime.now().strftime("%Y-%m-%d")
+    reset_counter_hari_ini_admin(tanggal)
+    # Hentikan semua timer yang aktif
+    for uid, task in list(active_timers.items()):
+        if not task.done():
+            task.cancel()
+    active_timers.clear()
+    await update.message.reply_text(f"✅ Data hari ini ({tanggal}) telah direset. Semua counter izin dihapus, semua izin aktif dibatalkan.")
+
+# ========== ADMIN NYANYI ==========
+async def cmd_nyanyi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Hanya admin yang bisa nyanyi.")
+        return
+    if not context.args:
+        await update.message.reply_text("Format: /nyanyi @username")
+        return
+    target_username = context.args[0].lstrip('@')
+    pesan = random.choice(UCAPAN_NYANYI).format(target_username)
+    await update.message.reply_text(pesan)
+
+# ========== HANDLER ABSEN, PULANG DLL ==========
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     if chat:
         register_chat(chat.id, chat.type)
     await update.message.reply_text(
-        "Semangat kerja nya ya, saya disini selalu mengawasi aktivitas kalian\n\n"
-        "/absen_masuk - Absen pagi (jam 10:00, telat jika lewat)\n"
-        "/istirahat_siang_mulai - Mulai istirahat siang (11:00 - 11:59)\n"
-        "/absen_istirahat_siang - Kembali dari istirahat siang (sebelum 12:00 tepat, lewat telat)\n"
-        "/istirahat_sore_mulai - Mulai istirahat sore (17:00 - 17:59)\n"
-        "/absen_istirahat_sore - Kembali dari istirahat sore (sebelum 18:00 tepat, lewat telat)\n"
-        "/izin_toilet [durasi] - Izin toilet (default 10 menit)\n"
-        "/selesai_toilet - Selesai izin\n"
-        "/cancel_izin @username - (Admin) batalkan izin\n"
-        "/pulang - Pulang kerja (wajib >= 22:00)\n"
-        "/laporan_bulanan [thn bln] - Laporan admin"
+        "👋 Bot Absen & Denda\n\n"
+        "Perintah:\n"
+        "/absen_masuk - Absen pagi (jam 10:00)\n"
+        "/istirahat_siang_mulai - Mulai istirahat siang (11:00-11:59)\n"
+        "/absen_istirahat_siang - Kembali dari istirahat siang (max 12:00)\n"
+        "/istirahat_sore_mulai - Mulai istirahat sore (17:00-17:59)\n"
+        "/absen_istirahat_sore - Kembali dari istirahat sore (max 18:00)\n"
+        "/WC🚽 - Izin toilet (default 10 menit, max 6x/hari)\n"
+        "/ROKOK🚬 - Izin rokok (default 5 menit, max 6x/hari)\n"
+        "/selesai_toilet - Selesai izin toilet\n"
+        "/selesai_rokok - Selesai izin rokok\n"
+        "/pulang - Pulang kerja (wajib >=22:00)\n"
+        "/laporan_bulanan [thn bln] - Laporan admin\n"
+        "/nyanyi @user - (Admin) nyanyiin user\n"
+        "/reset_hari_ini - (Admin) reset semua data izin hari ini"
     )
 
-# ABSEN PAGI
 async def cmd_absen_masuk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user: return
@@ -346,11 +394,10 @@ async def cmd_absen_masuk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"✅ Absen pagi: {now.strftime('%H:%M:%S')} - Status: {status.upper()}"
     if status == "telat":
         telat_menit = int((now - datetime.combine(now.date(), jam_kerja)).total_seconds() // 60)
-        kata = random.choice(UCAPAN_TELAT_PAGI).replace("{jam}", now.strftime("%H:%M"))
+        kata = random.choice(UCAPAN_TELAT_PAGI)
         msg += f"\n⚠️ Telat {telat_menit} menit!\n{kata}"
     await update.message.reply_text(msg)
 
-# MULAI ISTIRAHAT
 async def cmd_mulai_istirahat(update: Update, context: ContextTypes.DEFAULT_TYPE, shift: str, jam_mulai_str: str, jam_selesai_str: str, nama_shift: str):
     user = update.effective_user
     now = datetime.now()
@@ -358,7 +405,6 @@ async def cmd_mulai_istirahat(update: Update, context: ContextTypes.DEFAULT_TYPE
     jam_mulai = parse_time(jam_mulai_str)
     jam_selesai = parse_time(jam_selesai_str)
     jam_sekarang = now.time()
-    # Hanya diperbolehkan antara jam_mulai (inklusif) sampai jam_selesai (eksklusif)
     if jam_sekarang < jam_mulai or jam_sekarang >= jam_selesai:
         await update.message.reply_text(f"❌ {nama_shift.capitalize()} hanya bisa dimulai antara jam {jam_mulai_str} dan sebelum {jam_selesai_str}.")
         return
@@ -374,7 +420,6 @@ async def cmd_istirahat_siang_mulai(update: Update, context: ContextTypes.DEFAUL
 async def cmd_istirahat_sore_mulai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_mulai_istirahat(update, context, "sore_mulai", ISTIRAHAT_2_MULAI, ISTIRAHAT_2_SELESAI, "istirahat sore")
 
-# KEMBALI DARI ISTIRAHAT
 async def cmd_absen_istirahat(update: Update, context: ContextTypes.DEFAULT_TYPE, shift: str, jam_selesai_str: str, nama_shift: str):
     user = update.effective_user
     now = datetime.now()
@@ -399,7 +444,6 @@ async def cmd_absen_siang(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_absen_sore(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_absen_istirahat(update, context, "sore", ISTIRAHAT_2_SELESAI, "setelah istirahat sore")
 
-# PULANG
 async def cmd_pulang(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now()
     jam_pulang = parse_time(JAM_PULANG)
@@ -407,9 +451,8 @@ async def cmd_pulang(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Belum waktunya pulang. Pulang jam {JAM_PULANG}.")
     else:
         pesan = random.choice(UCAPAN_PULANG_LIST)
-        await update.message.reply_text(f"🎉 Pulang Kerja! 🎉\n\n{pesan}\n\n{UCAPAN_PULANG_DEFAULT}")
+        await update.message.reply_text(f"🎉 Pulang Kerja! 🎉\n\n{pesan}")
 
-# LAPORAN BULANAN
 async def cmd_laporan_bulanan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
@@ -435,13 +478,15 @@ async def cmd_laporan_bulanan(update: Update, context: ContextTypes.DEFAULT_TYPE
         nama = username or first_name
         c.execute("SELECT COUNT(*) FROM absensi WHERE user_id = ? AND tanggal >= ? AND tanggal < ? AND shift='pagi' AND status='telat'", (uid, start_date, end_date))
         telat_pagi = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM izin_toilet WHERE user_id = ? AND actual_end_time IS NOT NULL AND status='melebihi' AND actual_end_time >= ? AND actual_end_time < ?", (uid, start_date, end_date))
-        pelanggaran_wc = c.fetchone()[0]
-        laporan += f"👤 {nama} | Telat pagi: {telat_pagi} | Pelanggaran WC: {pelanggaran_wc}\n"
+        c.execute("SELECT SUM(jumlah) FROM counter_harian WHERE user_id = ? AND tanggal >= ? AND tanggal < ? AND jenis='toilet'", (uid, start_date, end_date))
+        total_toilet = c.fetchone()[0] or 0
+        c.execute("SELECT SUM(jumlah) FROM counter_harian WHERE user_id = ? AND tanggal >= ? AND tanggal < ? AND jenis='rokok'", (uid, start_date, end_date))
+        total_rokok = c.fetchone()[0] or 0
+        laporan += f"👤 {nama}\n   Telat pagi: {telat_pagi}\n   Total Toilet: {total_toilet}\n   Total Rokok: {total_rokok}\n\n"
     conn.close()
     await update.message.reply_text(laporan)
 
-# TASK PULANG OTOMATIS
+# ========== PULANG OTOMATIS ==========
 async def daily_pulang_checker(app: Application):
     while True:
         now = datetime.now()
@@ -451,7 +496,7 @@ async def daily_pulang_checker(app: Application):
             for chat_id in get_all_chats():
                 if not sudah_kirim_pulang_today(chat_id, tanggal):
                     pesan = random.choice(UCAPAN_PULANG_LIST)
-                    await app.bot.send_message(chat_id=chat_id, text=f"🎉 Pulang Kerja! 🎉\n\n{pesan}\n\n{UCAPAN_PULANG_DEFAULT}")
+                    await app.bot.send_message(chat_id=chat_id, text=f"🎉 Pulang Kerja! 🎉\n\n{pesan}")
                     catat_kirim_pulang(chat_id, tanggal)
         await asyncio.sleep(60)
 
@@ -464,11 +509,14 @@ async def set_commands(app: Application):
         BotCommand("absen_istirahat_siang", "Kembali dari istirahat siang (max 12:00)"),
         BotCommand("istirahat_sore_mulai", "Mulai istirahat sore (17:00-17:59)"),
         BotCommand("absen_istirahat_sore", "Kembali dari istirahat sore (max 18:00)"),
-        BotCommand("izin_toilet", "Izin toilet (default 10 menit)"),
+        BotCommand("WC🚽", "Izin toilet (default 10 menit, max 6x/hari)"),
+        BotCommand("ROKOK🚬", "Izin rokok (default 5 menit, max 6x/hari)"),
         BotCommand("selesai_toilet", "Selesai izin toilet"),
-        BotCommand("cancel_izin", "(Admin) Batalkan izin user"),
-        BotCommand("pulang", "Ucapan pulang (wajib >=22:00)"),
+        BotCommand("selesai_rokok", "Selesai izin rokok"),
+        BotCommand("pulang", "Pulang kerja (wajib >=22:00)"),
         BotCommand("laporan_bulanan", "Laporan bulanan (admin)"),
+        BotCommand("nyanyi", "(Admin) nyanyiin user"),
+        BotCommand("reset_hari_ini", "(Admin) reset data izin hari ini"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -482,11 +530,14 @@ def main():
     app.add_handler(CommandHandler("absen_istirahat_siang", cmd_absen_siang))
     app.add_handler(CommandHandler("istirahat_sore_mulai", cmd_istirahat_sore_mulai))
     app.add_handler(CommandHandler("absen_istirahat_sore", cmd_absen_sore))
-    app.add_handler(CommandHandler("izin_toilet", cmd_izin_toilet))
+    app.add_handler(CommandHandler("WC🚽", cmd_toilet))
+    app.add_handler(CommandHandler("ROKOK🚬", cmd_rokok))
     app.add_handler(CommandHandler("selesai_toilet", cmd_selesai_toilet))
-    app.add_handler(CommandHandler("cancel_izin", cmd_cancel_izin))
+    app.add_handler(CommandHandler("selesai_rokok", cmd_selesai_rokok))
     app.add_handler(CommandHandler("pulang", cmd_pulang))
     app.add_handler(CommandHandler("laporan_bulanan", cmd_laporan_bulanan))
+    app.add_handler(CommandHandler("nyanyi", cmd_nyanyi))
+    app.add_handler(CommandHandler("reset_hari_ini", cmd_reset_hari_ini))
 
     async def post_init(app: Application):
         await restore_timers(app)
