@@ -71,6 +71,7 @@ def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
                     jenis TEXT,
+                    durasi_menit INTEGER,
                     start_time TEXT,
                     expected_end_time TEXT,
                     chat_id INTEGER
@@ -185,16 +186,16 @@ def reset_counter_hari_ini_admin(tanggal: str):
 def get_active_izin(user_id_db: int):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, jenis, expected_end_time, chat_id FROM izin_aktif WHERE user_id = ? ORDER BY start_time DESC LIMIT 1", (user_id_db,))
+    c.execute("SELECT id, jenis, durasi_menit, expected_end_time, chat_id FROM izin_aktif WHERE user_id = ? ORDER BY start_time DESC LIMIT 1", (user_id_db,))
     row = c.fetchone()
     conn.close()
     return row
 
-def add_active_izin(user_id_db: int, jenis: str, start_time, expected_end, chat_id):
+def add_active_izin(user_id_db: int, jenis: str, durasi_menit: int, start_time, expected_end, chat_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO izin_aktif (user_id, jenis, start_time, expected_end_time, chat_id) VALUES (?, ?, ?, ?, ?)",
-              (user_id_db, jenis, start_time.isoformat(), expected_end.isoformat(), chat_id))
+    c.execute("INSERT INTO izin_aktif (user_id, jenis, durasi_menit, start_time, expected_end_time, chat_id) VALUES (?, ?, ?, ?, ?, ?)",
+              (user_id_db, jenis, durasi_menit, start_time.isoformat(), expected_end.isoformat(), chat_id))
     izin_id = c.lastrowid
     conn.commit()
     conn.close()
@@ -226,11 +227,11 @@ async def schedule_reminder(app, chat_id, user_id, username, jenis, durasi, izin
 async def restore_timers(app):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''SELECT izin.id, izin.jenis, izin.expected_end_time, izin.durasi_menit, izin.chat_id, users.telegram_id, users.username
+    c.execute('''SELECT izin.id, izin.jenis, izin.durasi_menit, izin.expected_end_time, izin.chat_id, users.telegram_id, users.username
                  FROM izin_aktif izin
                  JOIN users ON izin.user_id = users.id''')
     rows = c.fetchall()
-    for izin_id, jenis, expected_end_str, durasi, chat_id, telegram_id, username in rows:
+    for izin_id, jenis, durasi, expected_end_str, chat_id, telegram_id, username in rows:
         expected_end = datetime.fromisoformat(expected_end_str)
         now = datetime.now()
         if expected_end > now:
@@ -261,7 +262,7 @@ async def cmd_izin(update: Update, context: ContextTypes.DEFAULT_TYPE, jenis: st
             return
     start_time = datetime.now()
     expected_end = start_time + timedelta(minutes=durasi)
-    izin_id = add_active_izin(user_id_db, jenis, start_time, expected_end, chat.id)
+    izin_id = add_active_izin(user_id_db, jenis, durasi, start_time, expected_end, chat.id)
     mention = f"@{user.username}" if user.username else user.first_name
     await update.message.reply_text(
         f"{mention} {emoji} {nama_izin} {durasi} menit mulai {start_time.strftime('%H:%M')}. Selesai maksimal {expected_end.strftime('%H:%M')}.\n"
@@ -289,7 +290,7 @@ async def cmd_selesai(update: Update, context: ContextTypes.DEFAULT_TYPE, jenis:
     if not aktif:
         await update.message.reply_text("Tidak ada izin aktif.")
         return
-    izin_id, aktif_jenis, expected_end_str, chat_id = aktif
+    izin_id, aktif_jenis, durasi, expected_end_str, chat_id = aktif
     if aktif_jenis != jenis:
         await update.message.reply_text(f"Anda sedang izin {aktif_jenis}, bukan {nama_izin}.")
         return
